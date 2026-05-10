@@ -63,6 +63,9 @@ SMOOTHING_ALPHA = 0.3
 # Percentage of the lane to calculate the setpoint.
 LANE_SETPOINT_PERCENTAGE = 0.35
 
+# Max number of lines for the algorithm to detect a lane separator.
+MAX_LINES_FOR_LANE_THRESHOLD = 4
+
 
 class PIDController:
     """
@@ -386,7 +389,7 @@ def main():
 
         # If too many edges generate unstable line detections,
         # use the yellow mask directly for a cleaner Hough transform.
-        if lines is not None and len(lines) > HOUGH_THRESHOLD:
+        if lines is not None and len(lines) > MAX_LINES_FOR_LANE_THRESHOLD:
             lines = detect_lines(apply_region_of_interest(yellow_mask))
 
         lane_center = calculate_lane_center(lines, frame, image_width)

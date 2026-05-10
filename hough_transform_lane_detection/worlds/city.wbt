@@ -118,7 +118,7 @@ WorldInfo {
 }
 Viewpoint {
   orientation -0.5773502691896258 0.5773502691896258 0.5773502691896258 2.0944
-  position 9.89344729731263e-14 -1.0238200887503492e-12 364.9481220823018
+  position -84.8607247576199 40.846424809955664 323.5456596962409
   near 1
   follow "vehicle"
   followSmoothness 0
@@ -647,7 +647,7 @@ GenericTrafficLight {
   startGreen FALSE
   greenTime 10
   redTime 10
-  state "red"
+  state "green"
 }
 CrossRoadsTrafficLight {
   translation 45 -45 0
