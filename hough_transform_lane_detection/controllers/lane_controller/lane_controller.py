@@ -66,6 +66,9 @@ LANE_SETPOINT_PERCENTAGE = 0.35
 # Max number of lines for the algorithm to detect a lane separator.
 MAX_LINES_FOR_LANE_THRESHOLD = 4
 
+# Multiplier for the UI display windows at runtime.
+DISPLAY_UI_SCALE_MULTIPLIER = 4
+
 
 class PIDController:
     """
@@ -332,6 +335,48 @@ def calculate_lane_center(lines, frame, image_width):
     return None
 
 
+def display(driver, image_width, image_height, frame, gray, masked_edges):
+    frame_big = cv2.resize(
+        frame,
+        (
+            image_width * DISPLAY_UI_SCALE_MULTIPLIER,
+            image_height * DISPLAY_UI_SCALE_MULTIPLIER,
+        ),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    gray_big = cv2.resize(
+        gray,
+        (
+            image_width * DISPLAY_UI_SCALE_MULTIPLIER,
+            image_height * DISPLAY_UI_SCALE_MULTIPLIER,
+        ),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    roi_big = cv2.resize(
+        masked_edges,
+        (
+            image_width * DISPLAY_UI_SCALE_MULTIPLIER,
+            image_height * DISPLAY_UI_SCALE_MULTIPLIER,
+        ),
+        interpolation=cv2.INTER_NEAREST,
+    )
+
+    cv2.imshow("Camera (Hough + Canny)", frame_big)
+    cv2.imshow("Gray mask", gray_big)
+    cv2.imshow("ROI", roi_big)
+
+    if driver.getTime() < 0.1:
+        cv2.moveWindow("Camera (Hough + Canny)", 10, 50)
+        cv2.moveWindow(
+            "Gray mask", 10, 50 + image_height * DISPLAY_UI_SCALE_MULTIPLIER + 40
+        )
+        cv2.moveWindow(
+            "ROI", 10, 50 + (image_height * DISPLAY_UI_SCALE_MULTIPLIER + 40) * 2
+        )
+
+    cv2.waitKey(1)
+
+
 def main():
     """
     Main function that initializes the vehicle and runs the autonomous
@@ -409,10 +454,7 @@ def main():
         if steering_angle > 0:
             print(f"lane_center: {lane_center}, steering: {steering_angle:.4f}")
 
-        cv2.imshow("Camera", frame)
-        cv2.imshow("Gray mask", gray)
-        cv2.imshow("ROI", masked_edges)
-        cv2.waitKey(1)
+        display(driver, image_width, image_height, frame, gray, masked_edges)
 
 
 if __name__ == "__main__":
