@@ -285,7 +285,7 @@ def detect_lines(masked_edges):
     return lines
 
 
-def calculate_lane_center(lines, frame, image_width):
+def calculate_lane_center(lines, frame):
     """
     Convert detected lines into a PID controller input by calculating the
     lane center from non-horizontal line midpoints.
@@ -295,7 +295,6 @@ def calculate_lane_center(lines, frame, image_width):
     Args:
         lines: Array of detected line segments from HoughLinesP
         frame: BGR image for drawing debug lines
-        image_width: Width of the camera image in pixels
 
     Returns:
         lane_center: The x-coordinate of the average lane center,
@@ -435,9 +434,10 @@ def main():
         # If too many edges generate unstable line detections,
         # use the yellow mask directly for a cleaner Hough transform.
         if lines is not None and len(lines) > MAX_LINES_FOR_LANE_THRESHOLD:
-            lines = detect_lines(apply_region_of_interest(yellow_mask))
+            masked_edges = apply_region_of_interest(yellow_mask)
+            lines = detect_lines(masked_edges)
 
-        lane_center = calculate_lane_center(lines, frame, image_width)
+        lane_center = calculate_lane_center(lines, frame)
 
         if lane_center is not None:
             smoothed_lane_center = (
