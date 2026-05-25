@@ -119,8 +119,8 @@ WorldInfo {
   ]
 }
 Viewpoint {
-  orientation -0.45748569314163845 0.02996208879094533 0.8887120533704931 3.025321396918276
-  position 47.292745050707865 44.03358852399897 74.08059713472667
+  orientation -0.0696164865358832 0.09649062762915678 0.9928963206609895 1.2567728983862565
+  position 41.393816283909146 -35.37712377163723 3.4527243243664962
   near 1
   follow "vehicle"
   followSmoothness 0
@@ -617,9 +617,10 @@ CurvedRoadSegment {
   curvatureRadius 40.5
 }
 DEF VEHICLE BmwX5 {
-  translation 5.60911 45.14 0.26702
-  rotation 0.012795947566112598 -4.99889827643198e-07 0.9999181285113474 3.141589273847238
-  controller "<extern>"
+  translation 46.7453 -21.4427 0.388725
+  rotation -9.500679999227945e-06 -8.500809999309198e-06 -0.9999999999187368 -1.5707953071795862
+  engineSound ""
+  controller "pedestrian_detection_controller"
   sensorsSlotFront [
     SickLms291 {
       translation 0.06 0 0
@@ -653,8 +654,8 @@ DEF VEHICLE BmwX5 {
         }
       ]
       fieldOfView 1
-      width 256
-      height 128
+      width 1024
+      height 512
     }
   ]
   sensorsSlotCenter [
@@ -672,7 +673,7 @@ GenericTrafficLight {
   startGreen FALSE
   greenTime 10
   redTime 10
-  state "green"
+  state "red"
 }
 CrossRoadsTrafficLight {
   translation 45 -45 0
@@ -1481,6 +1482,16 @@ Pedestrian {
   ]
 }
 Pedestrian {
+  translation -3.59 47 1.29
+  rotation 0 0 1 1.01459e-06
+  name "pedestrian(15)"
+  controller "<none>"
+  controllerArgs [
+    "--trajectory=-34 55, -34 33"
+    "--speed=3.5"
+  ]
+}
+Pedestrian {
   translation -62.36 54.98 1.27
   rotation 0 0 1 -1.5707953071795862
   name "pedestrian(3)"
@@ -1571,6 +1582,7 @@ Pedestrian {
   ]
 }
 DEF BARREL OilBarrel {
+  translation 46.59 2.4 0.44
 }
 Robot {
   name "Supervisor"

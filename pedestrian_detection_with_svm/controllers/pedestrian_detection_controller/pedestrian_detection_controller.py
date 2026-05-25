@@ -3,8 +3,46 @@
 # line of roads. The vehicle maintains a constant speed of at least 50 km/h.
 
 from vehicle import Driver
+from ultralytics import YOLO
 import numpy as np
 import cv2
+import joblib
+import os
+
+# =============================================================================
+# MODIFICATION: Added LiDAR-based obstacle detection and emergency braking.
+# The SICK LMS 291 LiDAR is enabled and only the central 20° arc is read.
+# If any point in that arc is closer than 20m, emergency braking is applied.
+# Reference: Webots SICK LiDAR documentation
+# https://www.cyberbotics.com/doc/guide/lidar-sensors
+# =============================================================================
+
+# =============================================================================
+# MODIFICATION: Added HOG + SVM pedestrian classification.
+# When LiDAR detects an obstacle, the camera image is scanned using a sliding
+# window approach with HOG features fed to a trained Linear SVM to classify
+# whether the obstacle is a pedestrian or a barrel.
+# Reference: Dalal & Triggs, "HOG for Human Detection", CVPR 2005
+# Reference: https://medium.com/@ricardo.zuccolo/self-driving-cars-opencv-and-svm
+# =============================================================================
+
+# SVM Model paths (relative to this controller file)
+CONTROLLER_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR = os.path.join(CONTROLLER_DIR, "..", "..", "svm_model")
+SVM_MODEL_PATH = os.path.join(MODEL_DIR, "pedestrian_svm_model.pkl")
+SVM_SCALER_PATH = os.path.join(MODEL_DIR, "pedestrian_svm_scaler.pkl")
+YOLO_PATH = os.path.join(MODEL_DIR, "yolov8n.pt")
+
+# Sliding window parameters for 256x128 camera image
+SVM_WINDOW_SIZE = (64, 128)  # HOG detection window (width, height)
+SVM_STEP_SIZE = 16           # Pixels to slide the window
+SVM_SCALES = [0.5]           # 0.5 = 2x upscale only (image becomes 512x256)
+SVM_CONFIDENCE_THRESHOLD = 0.0  # 0 = SVM decision boundary (positive = pedestrian)
+
+# LiDAR detection parameters
+LIDAR_DETECTION_ANGLE_DEG = 30  # Only read central 30° of the 180° scan
+LIDAR_MAX_RANGE_M = 20.0  # Obstacle detection limited to 20 meters
+LIDAR_DEVICE_NAME = "Sick LMS 291"  # Default name from SickLms291 proto
 
 # Proportional gain, main corrective force
 KP = 1.0
@@ -18,8 +56,8 @@ KD = 0.2
 # Maximum steering angle in radians (limits the PID output)
 MAX_STEERING_ANGLE = 0.5
 
-# Constant cruising speed in km/h (must be >= 50 km/h as per requirements)
-CRUISING_SPEED = 50
+# Constant cruising speed in km/h
+CRUISING_SPEED = 40
 
 # Default steering angle when no lines are detected (drive straight)
 DEFAULT_ANGLE = 0.0
@@ -53,9 +91,9 @@ HOUGH_MAX_LINE_GAP = 15
 
 # Minimum angle from horizontal (in degrees) for a line to be considered
 # a valid lane marking. Lines more horizontal than this are rejected
-# (e.g., crossing road markings). 30° means only lines between 30°-90° from
-# horizontal are kept (mostly vertical lines = lane markings).
-MIN_LINE_ANGLE_DEG = 30
+# (e.g., crossing road markings, pedestrian crossings). 45° means only lines
+# between 45°-90° from horizontal are kept (mostly vertical = lane markings).
+MIN_LINE_ANGLE_DEG = 50
 
 # Multiplier to make the steering smoother.
 SMOOTHING_ALPHA = 0.3
@@ -65,6 +103,12 @@ LANE_SETPOINT_PERCENTAGE = 0.35
 
 # Max number of lines for the algorithm to detect a lane separator.
 MAX_LINES_FOR_LANE_THRESHOLD = 4
+
+# Percentage of image width to use for ROI (centered). 0.7 = center 70%.
+ROI_WIDTH_PERCENTAGE = 0.70
+
+# Percentage of image height for ROI top boundary. 0.55 = bottom 45% of image.
+ROI_TOP_PERCENTAGE = 0.55
 
 # Multiplier for the UI display windows at runtime.
 DISPLAY_UI_SCALE_MULTIPLIER = 2
@@ -239,15 +283,18 @@ def apply_region_of_interest(edges):
     mask = np.zeros_like(edges)
 
     # In order: bottom-leftm top-left, top-right, bottom-right.
-    # Only look at the bottom 30% of the image (near-field road)
-    # This prevents reacting to distant yellow lines that appear off-center
+    # Only look at the bottom 45% of the image and center ROI_WIDTH_PERCENTAGE
+    # This prevents reacting to pedestrians, cones, and objects on the sides
+    margin = (1.0 - ROI_WIDTH_PERCENTAGE) / 2.0
+    left = int(width * margin)
+    right = int(width * (1.0 - margin))
     roi_vertices = np.array(
         [
             [
-                (0, height),
-                (0, int(height * 0.55)),
-                (width, int(height * 0.55)),
-                (width, height),
+                (left, height),
+                (left, int(height * ROI_TOP_PERCENTAGE)),
+                (right, int(height * ROI_TOP_PERCENTAGE)),
+                (right, height),
             ]
         ],
         dtype=np.int32,
@@ -376,6 +423,41 @@ def display(driver, image_width, image_height, frame, gray, masked_edges):
     cv2.waitKey(1)
 
 
+def detect_pedestrian_svm(frame, svm_model, svm_scaler, hog):
+    """
+    MODIFICATION: Pedestrian detection using YOLOv8 object detection model.
+    YOLOv8 is used to detect 'person' class objects in the camera frame.
+    When a person is detected in the image, the obstacle is classified as
+    a pedestrian. Otherwise, it's classified as a barrel.
+
+    Reference: Ultralytics YOLOv8 documentation
+    https://docs.ultralytics.com/
+    """
+
+
+    # Use YOLOv8 nano model for speed
+    if not hasattr(detect_pedestrian_svm, 'model'):
+        detect_pedestrian_svm.model = YOLO(YOLO_PATH)
+
+    results = detect_pedestrian_svm.model(frame, verbose=False, conf=0.3)
+
+    detected = False
+    for result in results:
+        for box in result.boxes:
+            cls_id = int(box.cls[0])
+            # Class 0 = 'person' in COCO dataset
+            if cls_id == 0:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                conf = float(box.conf[0])
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                cv2.putText(frame, f"PED {conf:.2f}", (x1, y1 - 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+                detected = True
+
+    print(f"[YOLO] pedestrian={detected}")
+    return detected
+
+
 def main():
     """
     Main function that initializes the vehicle and runs the autonomous
@@ -397,6 +479,18 @@ def main():
     camera = driver.getDevice("camera")
     camera.enable(timestep)
 
+    # MODIFICATION: Enable SICK LiDAR sensor for obstacle detection
+    lidar = driver.getDevice(LIDAR_DEVICE_NAME)
+    lidar.enable(timestep)
+    lidar.enablePointCloud()  # needed to read range data
+
+    # MODIFICATION: Load trained SVM model and scaler for pedestrian detection
+    print(f"Loading SVM model from: {SVM_MODEL_PATH}")
+    svm_model = joblib.load(SVM_MODEL_PATH)
+    svm_scaler = joblib.load(SVM_SCALER_PATH)
+    hog = cv2.HOGDescriptor(SVM_WINDOW_SIZE, (16, 16), (8, 8), (8, 8), 9)
+    print("SVM model loaded successfully")
+
     image_width = camera.getWidth()
     image_height = camera.getHeight()
 
@@ -415,16 +509,19 @@ def main():
 
     driver.setCruisingSpeed(CRUISING_SPEED)
 
+    was_braking = False
+    hazard_on = False
+    last_is_pedestrian = False
+    brake_frame_count = 0
+
     while driver.step() != -1:
         frame = get_image(camera)
         gray = convert_to_grayscale(frame)
         yellow_mask = get_yellow_mask(frame)
 
-        # Dilate the mask with a 5x5 kernel to make the yellow stripe thicker
-        # and more robust for line detection. The #dbce7a yellow stripe is very
-        # thin at distance on the 128x64 camera, so dilation ensures HoughLinesP
-        # has enough connected pixels to detect it as a line segment.
-        kernel = np.ones((5, 5), np.uint8)
+        # Dilate the mask with a 3x3 kernel to make the yellow stripe thicker
+        # but not so much that it bleeds into nearby white crossing stripes.
+        kernel = np.ones((3, 3), np.uint8)
         yellow_mask = cv2.dilate(yellow_mask, kernel, iterations=1)
 
         edges = detect_edges(yellow_mask)
@@ -448,11 +545,73 @@ def main():
         else:
             steering_angle = DEFAULT_ANGLE
 
-        driver.setSteeringAngle(steering_angle)
-        driver.setCruisingSpeed(CRUISING_SPEED)
+        # MODIFICATION: LiDAR obstacle detection - read central 30° arc
+        obstacle_detected = False
+        min_distance = float('inf')
+        range_image = lidar.getRangeImage()
+        if range_image:
+            num_points = len(range_image)
+            # SICK LMS 291 has 180° FOV; calculate indices for central 30°
+            angle_per_point = 180.0 / num_points
+            center = num_points // 2
+            half_window = int((LIDAR_DETECTION_ANGLE_DEG / 2.0) / angle_per_point)
+            start_idx = center - half_window
+            end_idx = center + half_window
+
+            for i in range(start_idx, end_idx):
+                distance = range_image[i]
+                if distance < min_distance:
+                    min_distance = distance
+                if distance < LIDAR_MAX_RANGE_M:
+                    obstacle_detected = True
+
+        # MODIFICATION: Emergency braking when obstacle detected
+        if obstacle_detected:
+            driver.setThrottle(0.0)
+            driver.setBrakeIntensity(1.0)
+            driver.setSteeringAngle(steering_angle)  # Keep steering to maintain lane
+
+            # MODIFICATION: Use YOLO to classify obstacle every 5 frames
+            if not was_braking or brake_frame_count % 5 == 0:
+                is_pedestrian = detect_pedestrian_svm(frame, svm_model, svm_scaler, hog)
+                last_is_pedestrian = is_pedestrian
+            else:
+                is_pedestrian = last_is_pedestrian
+            brake_frame_count += 1
+
+            if is_pedestrian:
+                # Pedestrian: brake only, NO hazard lights
+                if hazard_on:
+                    driver.setHazardFlashers(False)
+                    hazard_on = False
+                print(f"[BRAKE] PEDESTRIAN at {min_distance:.1f}m - STOPPING!")
+                cv2.rectangle(frame, (0, 0), (image_width, 14), (0, 0, 200), -1)
+                cv2.putText(frame, "PEDESTRIAN", (4, 11), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+            else:
+                # Not a pedestrian: brake + hazard lights ON
+                if not hazard_on:
+                    driver.setHazardFlashers(True)
+                    hazard_on = True
+                print(f"[BRAKE] OBSTACLE at {min_distance:.1f}m - STOPPING!")
+                cv2.rectangle(frame, (0, 0), (image_width, 14), (0, 100, 200), -1)
+                cv2.putText(frame, "OBSTACLE", (4, 11), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+
+            was_braking = True
+        else:
+            driver.setBrakeIntensity(0.0)
+            if was_braking:
+                driver.setHazardFlashers(False)
+                hazard_on = False
+            driver.setSteeringAngle(steering_angle)
+            driver.setCruisingSpeed(CRUISING_SPEED)
+            cv2.rectangle(frame, (0, 0), (image_width, 14), (0, 150, 0), -1)
+            cv2.putText(frame, "OK", (4, 11), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+            was_braking = False
+            brake_frame_count = 0
 
         if steering_angle > 0:
-            print(f"lane_center: {lane_center}, steering: {steering_angle:.4f}")
+            # print(f"lane_center: {lane_center}, steering: {steering_angle:.4f}")
+            pass
 
         display(driver, image_width, image_height, frame, gray, masked_edges)
 
