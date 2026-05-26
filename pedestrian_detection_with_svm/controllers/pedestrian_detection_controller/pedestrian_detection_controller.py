@@ -33,6 +33,9 @@ SVM_MODEL_PATH = os.path.join(MODEL_DIR, "pedestrian_svm_model.pkl")
 SVM_SCALER_PATH = os.path.join(MODEL_DIR, "pedestrian_svm_scaler.pkl")
 YOLO_PATH = os.path.join(MODEL_DIR, "yolov8n.pt")
 
+# Switch between YOLO and custom SVM model
+USE_YOLO = True  # True = YOLO, False = custom HOG+SVM model
+
 # Sliding window parameters for 256x128 camera image
 SVM_WINDOW_SIZE = (64, 128)  # HOG detection window (width, height)
 SVM_STEP_SIZE = 16           # Pixels to slide the window
@@ -425,37 +428,62 @@ def display(driver, image_width, image_height, frame, gray, masked_edges):
 
 def detect_pedestrian_svm(frame, svm_model, svm_scaler, hog):
     """
-    MODIFICATION: Pedestrian detection using YOLOv8 object detection model.
-    YOLOv8 is used to detect 'person' class objects in the camera frame.
-    When a person is detected in the image, the obstacle is classified as
-    a pedestrian. Otherwise, it's classified as a barrel.
+    MODIFICATION: Pedestrian detection using either YOLOv8 or HOG+SVM.
+    Controlled by USE_YOLO flag at the top of the file.
 
-    Reference: Ultralytics YOLOv8 documentation
-    https://docs.ultralytics.com/
+    Reference: Sliding Window + HOG + SVM technique
+    https://medium.com/@ricardo.zuccolo/self-driving-cars-opencv-and-svm
+    Reference: Ultralytics YOLOv8 - https://docs.ultralytics.com/
     """
+    if USE_YOLO:
+        if not hasattr(detect_pedestrian_svm, 'yolo_model'):
+            detect_pedestrian_svm.yolo_model = YOLO(YOLO_PATH)
 
+        results = detect_pedestrian_svm.yolo_model(frame, verbose=False, conf=0.3)
 
-    # Use YOLOv8 nano model for speed
-    if not hasattr(detect_pedestrian_svm, 'model'):
-        detect_pedestrian_svm.model = YOLO(YOLO_PATH)
+        detected = False
+        for result in results:
+            for box in result.boxes:
+                cls_id = int(box.cls[0])
+                if cls_id == 0:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    conf = float(box.conf[0])
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 1)
+                    cv2.putText(frame, f"PED {conf:.2f}", (x1, y1 - 4),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+                    detected = True
 
-    results = detect_pedestrian_svm.model(frame, verbose=False, conf=0.3)
+        print(f"[YOLO] pedestrian={detected}")
+        return detected
+    else:
+        h, w = frame.shape[:2]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        detected = False
+        max_score = -999
 
-    detected = False
-    for result in results:
-        for box in result.boxes:
-            cls_id = int(box.cls[0])
-            # Class 0 = 'person' in COCO dataset
-            if cls_id == 0:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                conf = float(box.conf[0])
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                cv2.putText(frame, f"PED {conf:.2f}", (x1, y1 - 4),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
-                detected = True
+        x_start = int(w * 0.25)
+        x_end = int(w * 0.75)
+        y_start = int(h * 0.1)
+        y_end = int(h * 0.85)
 
-    print(f"[YOLO] pedestrian={detected}")
-    return detected
+        for y in range(y_start, max(y_start + 1, y_end - 128 + 1), 32):
+            for x in range(x_start, max(x_start + 1, x_end - 64 + 1), 32):
+                window = gray[y:y + 128, x:x + 64]
+                if window.shape[0] != 128 or window.shape[1] != 64:
+                    continue
+                features = hog.compute(window).flatten().reshape(1, -1)
+                features_scaled = svm_scaler.transform(features)
+                score = svm_model.decision_function(features_scaled)[0]
+
+                if score > max_score:
+                    max_score = score
+
+                if score > SVM_CONFIDENCE_THRESHOLD:
+                    cv2.rectangle(frame, (x, y), (x + 64, y + 128), (0, 0, 255), 1)
+                    detected = True
+
+        print(f"[SVM] max_score={max_score:.2f} pedestrian={detected}")
+        return detected
 
 
 def main():

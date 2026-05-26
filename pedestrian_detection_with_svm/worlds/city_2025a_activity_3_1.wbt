@@ -654,8 +654,8 @@ DEF VEHICLE BmwX5 {
         }
       ]
       fieldOfView 1
-      width 1024
-      height 512
+      width 256
+      height 128
     }
   ]
   sensorsSlotCenter [
