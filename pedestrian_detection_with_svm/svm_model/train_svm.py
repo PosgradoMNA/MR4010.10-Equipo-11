@@ -15,6 +15,7 @@ Usage:
 Output:
     pedestrian_svm_model.pkl  - Trained SVM model
     pedestrian_svm_scaler.pkl - Feature scaler
+    confusion_matrix.png      - Confusion matrix plot
 """
 
 import os
@@ -25,9 +26,12 @@ import cv2
 from sklearn.svm import LinearSVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, ConfusionMatrixDisplay
 import joblib
 import time
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 DATASET_PATH = "/Users/cesarivp/Downloads/archive"
 TRAIN_IMAGES = os.path.join(DATASET_PATH, "Train", "JPEGImages")
@@ -193,6 +197,20 @@ def main():
     print(f"\nTest Accuracy: {accuracy:.4f}")
     print("\nClassification Report:")
     print(classification_report(y_test, y_pred, target_names=["Non-Pedestrian", "Pedestrian"]))
+
+    # Confusion Matrix
+    cm = confusion_matrix(y_test, y_pred)
+    print("Confusion Matrix:")
+    print(cm)
+
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Non-Pedestrian", "Pedestrian"])
+    disp.plot(cmap="Blues")
+    cm_path = os.path.join(os.path.dirname(__file__), "confusion_matrix.png")
+    plt.title("SVM Pedestrian Detection - Confusion Matrix")
+    plt.tight_layout()
+    plt.savefig(cm_path, dpi=150)
+    plt.close()
+    print(f"Confusion matrix saved to: {cm_path}")
 
     # Save model and scaler
     joblib.dump(svm, MODEL_OUTPUT)
